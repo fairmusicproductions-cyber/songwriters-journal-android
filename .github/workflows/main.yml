@@ -1,0 +1,81 @@
+
+name: Build Songwriters Journal Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Android SDK paths
+        run: |
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Install Node.js dependencies
+        run: npm install
+
+      - name: Create Android project
+        run: npx cap add android
+
+      - name: Sync application files
+        run: npx cap sync android
+
+      - name: Add microphone permission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
+          permission = '<uses-permission android:name="android.permission.RECORD_AUDIO" />'
+
+          if 'android.permission.RECORD_AUDIO' not in text:
+              if '<application' not in text:
+                  raise SystemExit('Application element not found in AndroidManifest.xml')
+              text = text.replace('<application', permission + '\n    <application', 1)
+              manifest.write_text(text)
+          PY
+
+      - name: Enable native Android audio recording
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          activity = Path("android/app/src/main/java/com/fairmusicproductions/songwritersjournal/MainActivity.java")
+          activity.parent.mkdir(parents=True, exist_ok=True)
+          activity.write_text('package com.fairmusicproductions.songwritersjournal;\n\nimport android.Manifest;\nimport android.content.pm.PackageManager;\nimport android.media.MediaRecorder;\nimport android.os.Build;\nimport android.os.Bundle;\nimport android.util.Base64;\nimport android.webkit.JavascriptInterface;\nimport androidx.core.app.ActivityCompat;\nimport androidx.core.content.ContextCompat;\nimport com.getcapacitor.BridgeActivity;\nimport java.io.File;\nimport java.nio.file.Files;\n\npublic class MainActivity extends BridgeActivity {\n    private static final int MIC_PERMISSION_REQUEST = 1001;\n    private NativeRecorder nativeRecorder;\n\n    @Override public void onCreate(Bundle state) {\n        super.onCreate(state);\n        nativeRecorder = new NativeRecorder();\n        bridge.getWebView().addJavascriptInterface(nativeRecorder, "JournalNativeRecorder");\n        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)\n                != PackageManager.PERMISSION_GRANTED) {\n            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, MIC_PERMISSION_REQUEST);\n        }\n    }\n\n    @Override protected void onDestroy() {\n        if (nativeRecorder != null) nativeRecorder.release();\n        super.onDestroy();\n    }\n\n    private class NativeRecorder {\n        private MediaRecorder recorder;\n        private File recordingFile;\n        @JavascriptInterface public synchronized String startRecording() {\n            if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO)\n                    != PackageManager.PERMISSION_GRANTED) return "Microphone permission not granted. Allow it in Android Settings.";\n            if (recorder != null) return "Recording is already running";\n            try {\n                recordingFile = File.createTempFile("journal_", ".m4a", getCacheDir());\n                if (Build.VERSION.SDK_INT >= 31) recorder = new MediaRecorder(MainActivity.this);\n                else recorder = new MediaRecorder();\n                recorder.setAudioSource(MediaRecorder.AudioSource.MIC);\n                recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);\n                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);\n                recorder.setAudioEncodingBitRate(96000);\n                recorder.setAudioSamplingRate(44100);\n                recorder.setOutputFile(recordingFile.getAbsolutePath());\n                recorder.prepare();\n                recorder.start();\n                return "OK";\n            } catch (Exception e) {\n                release();\n                return e.getClass().getSimpleName() + ": " + e.getMessage();\n            }\n        }\n        @JavascriptInterface public synchronized String stopRecording() {\n            if (recorder == null) return "ERROR:No recording in progress";\n            try {\n                recorder.stop();\n                recorder.reset();\n                recorder.release();\n                recorder = null;\n                if (recordingFile == null || recordingFile.length() == 0) return "ERROR:Empty recording";\n                if (recordingFile.length() > 20 * 1024 * 1024) return "ERROR:Recording exceeds 20 MB limit";\n                byte[] data = Files.readAllBytes(recordingFile.toPath());\n                return Base64.encodeToString(data, Base64.NO_WRAP);\n            } catch (Exception e) {\n                return "ERROR:" + e.getClass().getSimpleName() + ": " + e.getMessage();\n            } finally {\n                release();\n            }\n        }\n        synchronized void release() {\n            if (recorder != null) {\n                try { recorder.reset(); recorder.release(); } catch (Exception ignored) {}\n                recorder = null;\n            }\n            if (recordingFile != null) { recordingFile.delete(); recordingFile = null; }\n        }\n    }\n}\n')
+          PYCODE
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Songwriters-Journal-Android-Debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

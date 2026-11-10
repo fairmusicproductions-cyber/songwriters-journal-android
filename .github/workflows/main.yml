@@ -59,7 +59,7 @@ jobs:
               manifest.write_text(text)
           PY
 
-      - name: Request Android microphone permission
+      - name: Enable microphone recording in Android WebView
         run: |
           python3 - <<'PYCODE'
           from pathlib import Path
@@ -68,14 +68,16 @@ jobs:
           if not activity.exists():
               raise SystemExit(f'MainActivity not found: {activity}')
 
-          activity.write_text('''package com.fairmusicproductions.songwritersjournal;
+          activity.write_text(r'''package com.fairmusicproductions.songwritersjournal;
 
           import android.Manifest;
           import android.content.pm.PackageManager;
           import android.os.Bundle;
+          import android.webkit.PermissionRequest;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
+          import com.getcapacitor.BridgeWebChromeClient;
 
           public class MainActivity extends BridgeActivity {
               private static final int MIC_PERMISSION_REQUEST = 1001;
@@ -83,6 +85,29 @@ jobs:
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+
+                  // Keep Capacitor's WebChromeClient behavior (including file selection).
+                  bridge.getWebView().setWebChromeClient(new BridgeWebChromeClient(bridge) {
+                      @Override
+                      public void onPermissionRequest(PermissionRequest request) {
+                          runOnUiThread(() -> {
+                              boolean wantsAudio = false;
+                              for (String resource : request.getResources()) {
+                                  if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                                      wantsAudio = true;
+                                  }
+                              }
+                              if (wantsAudio &&
+                                  ContextCompat.checkSelfPermission(MainActivity.this,
+                                      Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                  request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                              } else {
+                                  request.deny();
+                              }
+                          });
+                      }
+                  });
+
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                           != PackageManager.PERMISSION_GRANTED) {
                       ActivityCompat.requestPermissions(this,

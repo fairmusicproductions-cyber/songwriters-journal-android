@@ -52,95 +52,47 @@ jobs:
           text = manifest.read_text()
           permission = '<uses-permission android:name="android.permission.RECORD_AUDIO" />'
 
-          if permission not in text:
-              text = text.replace(
-                  '<application',
-                  permission + '\n    <application',
-                  1
-              )
+          if 'android.permission.RECORD_AUDIO' not in text:
+              if '<application' not in text:
+                  raise SystemExit('Application element not found in AndroidManifest.xml')
+              text = text.replace('<application', permission + '\n    <application', 1)
               manifest.write_text(text)
           PY
 
-      - name: Enable microphone recording in Android WebView
+      - name: Request Android microphone permission
         run: |
-          python3 - <<'PY'
+          python3 - <<'PYCODE'
           from pathlib import Path
 
-          path = Path("android/app/src/main/java/com/fairmusicproductions/songwritersjournal/MainActivity.java")
-          path.parent.mkdir(parents=True, exist_ok=True)
+          activity = Path('android/app/src/main/java/com/fairmusicproductions/songwritersjournal/MainActivity.java')
+          if not activity.exists():
+              raise SystemExit(f'MainActivity not found: {activity}')
 
-          path.write_text("""package com.fairmusicproductions.songwritersjournal;
+          activity.write_text('''package com.fairmusicproductions.songwritersjournal;
 
           import android.Manifest;
           import android.content.pm.PackageManager;
           import android.os.Bundle;
-          import android.webkit.PermissionRequest;
-          import android.webkit.WebChromeClient;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
 
           public class MainActivity extends BridgeActivity {
-              private PermissionRequest pendingRequest;
-              private static final int MIC_REQUEST = 1001;
+              private static final int MIC_PERMISSION_REQUEST = 1001;
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-
-                  getBridge().getWebView().setWebChromeClient(new WebChromeClient() {
-                      @Override
-                      public void onPermissionRequest(PermissionRequest request) {
-                          runOnUiThread(() -> {
-                              boolean audioRequested = false;
-                              for (String resource : request.getResources()) {
-                                  if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
-                                      audioRequested = true;
-                                  }
-                              }
-
-                              if (!audioRequested) {
-                                  request.deny();
-                                  return;
-                              }
-
-                              if (ContextCompat.checkSelfPermission(
-                                      MainActivity.this, Manifest.permission.RECORD_AUDIO)
-                                      == PackageManager.PERMISSION_GRANTED) {
-                                  request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
-                              } else {
-                                  pendingRequest = request;
-                                  ActivityCompat.requestPermissions(
-                                      MainActivity.this,
-                                      new String[]{Manifest.permission.RECORD_AUDIO},
-                                      MIC_REQUEST
-                                  );
-                              }
-                          });
-                      }
-                  });
-              }
-
-              @Override
-              public void onRequestPermissionsResult(
-                      int requestCode, String[] permissions, int[] grantResults) {
-                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
-                  if (requestCode == MIC_REQUEST && pendingRequest != null) {
-                      PermissionRequest request = pendingRequest;
-                      pendingRequest = null;
-
-                      if (grantResults.length > 0 &&
-                              grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                          request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
-                      } else {
-                          request.deny();
-                      }
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                          != PackageManager.PERMISSION_GRANTED) {
+                      ActivityCompat.requestPermissions(this,
+                              new String[]{Manifest.permission.RECORD_AUDIO},
+                              MIC_PERMISSION_REQUEST);
                   }
               }
           }
-          """)
-          PY
+          ''')
+          PYCODE
 
       - name: Build debug APK
         working-directory: android

@@ -1,0 +1,8 @@
+{
+  "appId": "com.fairmusicproductions.songwritersjournal",
+  "appName": "Songwriter\u2019s Journal",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}

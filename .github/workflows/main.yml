@@ -73,46 +73,84 @@ jobs:
           import android.Manifest;
           import android.content.pm.PackageManager;
           import android.os.Bundle;
+          import android.util.Log;
           import android.webkit.PermissionRequest;
+          import androidx.annotation.NonNull;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
           import com.getcapacitor.BridgeWebChromeClient;
 
           public class MainActivity extends BridgeActivity {
-              private static final int MIC_PERMISSION_REQUEST = 1001;
+              private static final String TAG = "JournalMicrophone";
+              private static final int MIC_REQUEST = 1001;
+              private PermissionRequest pendingWebRequest;
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  // Keep Capacitor's WebChromeClient behavior (including file selection).
+                  // Preserve Capacitor's handling of file inputs and other WebView features.
                   bridge.getWebView().setWebChromeClient(new BridgeWebChromeClient(bridge) {
                       @Override
                       public void onPermissionRequest(PermissionRequest request) {
+                          runOnUiThread(() -> handleWebPermission(request));
+                      }
+
+                      @Override
+                      public void onPermissionRequestCanceled(PermissionRequest request) {
                           runOnUiThread(() -> {
-                              boolean wantsAudio = false;
-                              for (String resource : request.getResources()) {
-                                  if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
-                                      wantsAudio = true;
-                                  }
-                              }
-                              if (wantsAudio &&
-                                  ContextCompat.checkSelfPermission(MainActivity.this,
-                                      Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                  request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
-                              } else {
-                                  request.deny();
-                              }
+                              if (pendingWebRequest == request) pendingWebRequest = null;
                           });
                       }
                   });
+              }
+
+              private void handleWebPermission(PermissionRequest request) {
+                  boolean wantsAudio = false;
+                  for (String resource : request.getResources()) {
+                      if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                          wantsAudio = true;
+                      }
+                  }
+                  if (!wantsAudio) {
+                      Log.w(TAG, "WebView requested unsupported resources");
+                      request.deny();
+                      return;
+                  }
 
                   if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                          != PackageManager.PERMISSION_GRANTED) {
+                          == PackageManager.PERMISSION_GRANTED) {
+                      Log.i(TAG, "Granting WebView audio capture");
+                      request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                  } else {
+                      Log.i(TAG, "Requesting Android microphone permission");
+                      if (pendingWebRequest != null && pendingWebRequest != request) {
+                          pendingWebRequest.deny();
+                      }
+                      pendingWebRequest = request;
                       ActivityCompat.requestPermissions(this,
-                              new String[]{Manifest.permission.RECORD_AUDIO},
-                              MIC_PERMISSION_REQUEST);
+                          new String[]{Manifest.permission.RECORD_AUDIO}, MIC_REQUEST);
+                  }
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int requestCode,
+                      @NonNull String[] permissions, @NonNull int[] grantResults) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+                  if (requestCode != MIC_REQUEST) return;
+
+                  PermissionRequest request = pendingWebRequest;
+                  pendingWebRequest = null;
+                  if (request == null) return;
+
+                  boolean granted = grantResults.length > 0
+                      && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+                  Log.i(TAG, "Android microphone permission granted: " + granted);
+                  if (granted) {
+                      request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                  } else {
+                      request.deny();
                   }
               }
           }
